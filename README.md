@@ -4,13 +4,13 @@
 
 ---
 
-## 🚀 Live Demo
+## Live Demo
 **https://cinematch-movie-finding.streamlit.app/**  
 _First load downloads a small dataset and builds a similarity cache._
 
 ---
 
-## ✨ Features
+## Features
 - **Real-time search** - case-insensitive, year-aware (“Toy Story (1995)” works).
 - **Item–item recommendations** - cosine over binarized ratings, per-item Top-K.
 - **Auto bootstrap** - fetches **MovieLens 100K** (default) or **1M** (optional).
@@ -42,7 +42,7 @@ CineMatch/
 
 ---
 
-## 🧰 Core Libraries
+## Core Libraries
 | Library | Purpose |
 |---|---|
 | streamlit | UI and interactivity |
@@ -55,7 +55,7 @@ CineMatch/
 
 ---
 
-## 💻 Local Setup
+## Local Setup
 
 ### 1) Clone
 ```bash
@@ -82,8 +82,7 @@ pip install -r requirements.txt
 streamlit run dashboard/app.py
 ```
 
-Then open in your browser:
-👉 [http://localhost:8501](http://localhost:8501)
+Then open in browser: http://localhost:8501
 
 ---
 
@@ -99,7 +98,7 @@ Set:
 - (Optional) Python version from runtime.txt (e.g., python-3.11.9).
 - Deploy.
 
-Why streamlit_app.py? It guarantees the correct import path for dashboard/app.py and avoids package path issues.
+> Why streamlit_app.py? It guarantees the correct import path for dashboard/app.py and avoids package path issues.
 
 ---
 
