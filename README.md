@@ -4,7 +4,8 @@
 
 ---
 
-## 🚀 Live Demo
+## 🚀 Live Demo (Might take some time to load)
+https://cinematch-movie-finding.streamlit.app/
 
 ---
 
