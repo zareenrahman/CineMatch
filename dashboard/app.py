@@ -1,63 +1,51 @@
 # ==========================================
 # file: dashboard/app.py
 # ==========================================
-import os
-import math
+import os, math
 import streamlit as st
 import pandas as pd
 
 try:
-    from recsys.recsys_core import (
-        bootstrap_data, search_movies, movie_card, similar_items,
-    )
+    from recsys.recsys_core import bootstrap_data, search_movies, movie_card, similar_items
 except ModuleNotFoundError:
-    try:
-        from recsys_core import (
-            bootstrap_data, search_movies, movie_card, similar_items,
-        )
-    except ModuleNotFoundError:
-        import sys
-        REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        if REPO_ROOT not in sys.path:
-            sys.path.insert(0, REPO_ROOT)
-        from recsys.recsys_core import (
-            bootstrap_data, search_movies, movie_card, similar_items,
-        )
+    from recsys_core import bootstrap_data, search_movies, movie_card, similar_items  # local fallback
 
 st.set_page_config(page_title="CineMatch", page_icon="🎬", layout="wide")
 
-# ---------- Minimal CSS ----------
 st.markdown("""
 <style>
 .block-container {padding-top:1.5rem; padding-bottom:2.5rem;}
-.cm-chip {
-  display:inline-block; padding:.18rem .5rem; margin:.15rem .25rem .15rem 0;
-  border-radius:999px; font-size:.8rem; background: rgba(127,127,127,.08);
-  border:1px solid rgba(0,0,0,.12);
-}
-.cm-title-btn .stButton>button{
-  width:100%; text-align:left; font-weight:600; border-radius:12px;
-  border:1px solid rgba(0,0,0,.12); background:rgba(255,255,255,.6);
-}
+.cm-chip {display:inline-block; padding:.18rem .5rem; margin:.15rem .25rem .15rem 0; border-radius:999px; font-size:.8rem; background: rgba(127,127,127,.08); border:1px solid rgba(0,0,0,.12);}
+.cm-title-btn .stButton>button{width:100%; text-align:left; font-weight:600; border-radius:12px; border:1px solid rgba(0,0,0,.12); background:rgba(255,255,255,.6);}
 .cm-title-btn .stButton>button:hover{box-shadow:0 6px 16px rgba(0,0,0,.08);}
 [data-testid="stDataFrame"]{border-radius:12px; overflow:hidden;}
 </style>
 """, unsafe_allow_html=True)
 
+def _default_data_dir() -> str:
+    env = os.getenv("CINEMATCH_DATA_DIR")
+    if env: return env
+    if os.path.isdir("/mount/data") or os.access("/mount/data", os.W_OK):
+        return "/mount/data/cinematch"  # Cloud persistent volume
+    return os.path.join(os.path.expanduser("~"), ".cache", "cinematch")
+
 @st.cache_resource(show_spinner=True)
-def _bundle(data_dir: str):
+def _bundle(data_dir: str, force_flavor: str, min_ratings_for_sims: int, max_items_for_sims: int, topk: int, limit_1m: bool):
+    # why: cache key includes knobs so we reuse the right matrix
     return bootstrap_data(
         data_dir=data_dir,
-        min_ratings_for_sims=50,
-        max_items_for_sims=20000,
-        topk=50,
+        min_ratings_for_sims=min_ratings_for_sims,
+        max_items_for_sims=max_items_for_sims,
+        topk=topk,
+        force_flavor=force_flavor,
+        limit_1m=limit_1m,
     )
 
 def _set_selected(mid: int | None, sync_widget: bool = False):
     val = int(mid) if mid is not None else None
     st.session_state["selected_movie_id"] = val
     if sync_widget:
-        st.session_state["pending_pick"] = val  # sync selectbox next run
+        st.session_state["pending_pick"] = val  # keep selectbox in sync next run
 
 def _get_selected() -> int | None:
     return st.session_state.get("selected_movie_id")
@@ -72,10 +60,18 @@ def main():
 
     # Sidebar
     with st.sidebar:
-        st.header("Dataset")
-        data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+        st.header("Dataset & performance")
+        data_dir = _default_data_dir()
+        use_100k = st.toggle("Use MovieLens-100K (fast)", value=True)
+        min_r = st.number_input("Min ratings per item", 5, 200, 50, 5)
+        cap_items = st.number_input("Max items used for similarity", 1000, 50000, 20000, 1000)
+        topk = st.slider("Top-K neighbors per item", 10, 100, 50, 5)
+
+        force_flavor = "ml-100k" if use_100k else "ml-1m"
+        limit_1m = True  # keep 1M quick by capping to popular items
+
         st.caption(f"Data dir: `{os.path.abspath(data_dir)}`")
-        bundle = _bundle(data_dir)
+        bundle = _bundle(data_dir, force_flavor, int(min_r), int(cap_items), int(topk), limit_1m)
         st.success(f"Flavor: **{bundle.flavor}**  •  Users: {len(bundle.user_map):,}  •  Movies: {len(bundle.item_map):,}")
 
         if st.button("↻ Reset cache / recompute"):
@@ -83,10 +79,11 @@ def main():
                 st.cache_data.clear(); st.cache_resource.clear()
             except Exception:
                 pass
-            cache_path = os.path.join(data_dir, "item_sims_topk.npz")
-            if os.path.exists(cache_path):
-                try: os.remove(cache_path)
-                except Exception: pass
+            try:
+                cache_path = os.path.join(data_dir, "item_sims_topk.npz")
+                if os.path.exists(cache_path): os.remove(cache_path)
+            except Exception:
+                pass
             st.toast("Cache cleared. Re-running …")
             st.rerun()
 
@@ -159,13 +156,12 @@ def main():
 
         with c2:
             st.subheader("Similar Movies")
-            # key tied to selection so UI resets when you switch movies
             k_sims = st.slider("How many suggestions do you want?", 5, 20, 12, 1, key=f"k_sims_{sel}")
-            sims = similar_items(bundle, sel, k=k_sims)
+            sims = similar_items(bundle, sel, k=int(k_sims))
             if sims.empty:
                 st.info("No similar items found.")
             else:
-                n = min(k_sims, len(sims))
+                n = min(int(k_sims), len(sims))
                 cols_per_row = 5
                 rows = math.ceil(n / cols_per_row)
                 for r in range(rows):
@@ -174,8 +170,7 @@ def main():
                         idx = r * cols_per_row + c
                         if idx >= n: break
                         row = sims.iloc[idx]
-                        mid = int(row["movieId"])
-                        title = str(row["title"])
+                        mid = int(row["movieId"]); title = str(row["title"])
                         with cols[c]:
                             st.markdown("<div class='cm-title-btn'>", unsafe_allow_html=True)
                             if st.button(title, key=f"sugg_{mid}", use_container_width=True):
