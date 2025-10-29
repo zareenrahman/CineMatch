@@ -15,9 +15,6 @@ _First load downloads a small dataset and builds a similarity cache._
 ### Homepage
 ![Homepage Screenshot](UX/Homepage.jpg)
 
-### Example Search & Recommendations
-![Search Results Screenshot](UX/Search Results.jpg)
-
 ---
 
 ## Features
