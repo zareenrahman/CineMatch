@@ -10,6 +10,16 @@ _First load downloads a small dataset and builds a similarity cache._
 
 ---
 
+## App Previews
+
+### Homepage
+![Homepage Screenshot](UX/Homepage.jpg)
+
+### Example Search & Recommendations
+![Search Results Screenshot](UX/Search Results.jpg)
+
+---
+
 ## Features
 - **Real-time search** - case-insensitive, year-aware (“Toy Story (1995)” works).
 - **Item–item recommendations** - cosine over binarized ratings, per-item Top-K.
