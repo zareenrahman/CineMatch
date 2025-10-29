@@ -24,12 +24,15 @@
 ```
 
 CineMatch/
-├── dashboard/
-│   └── app.py                # Streamlit web UI
-├── recsys_core.py            # Core recommendation logic
-├── requirements.txt          # Python dependencies
+├─ dashboard/
+│  └─ app.py
+├─ recsys/
+│  ├─ __init__.py
+│  └─ recsys_core.py
+├── requirements.txt
 ├── README.md                 # Project documentation
 ├── LICENSE                   # Open-source license (e.g. MIT)
+└─ streamlit_app.py
 
 ````
 
