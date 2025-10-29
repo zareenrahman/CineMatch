@@ -1,18 +1,31 @@
-# ==========================================
+# =========================
 # file: dashboard/app.py
-# ==========================================
-import os, math
+# =========================
+import os
+import math
+import tempfile
 import streamlit as st
 import pandas as pd
 
 try:
-    from recsys.recsys_core import bootstrap_data, search_movies, movie_card, similar_items
+    from recsys.recsys_core import (
+        bootstrap_data,
+        search_movies,
+        movie_card,
+        similar_items,
+    )
 except ModuleNotFoundError:
-    from recsys_core import bootstrap_data, search_movies, movie_card, similar_items  # local fallback
+    from recsys_core import (
+        bootstrap_data,
+        search_movies,
+        movie_card,
+        similar_items,
+    )  # local fallback
 
 st.set_page_config(page_title="CineMatch", page_icon="🎬", layout="wide")
 
-st.markdown("""
+st.markdown(
+    """
 <style>
 .block-container {padding-top:1.5rem; padding-bottom:2.5rem;}
 .cm-chip {display:inline-block; padding:.18rem .5rem; margin:.15rem .25rem .15rem 0; border-radius:999px; font-size:.8rem; background: rgba(127,127,127,.08); border:1px solid rgba(0,0,0,.12);}
@@ -20,18 +33,41 @@ st.markdown("""
 .cm-title-btn .stButton>button:hover{box-shadow:0 6px 16px rgba(0,0,0,.08);}
 [data-testid="stDataFrame"]{border-radius:12px; overflow:hidden;}
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
+
 
 def _default_data_dir() -> str:
+    # why: On Streamlit Cloud only /mount is persistent+always writable
     env = os.getenv("CINEMATCH_DATA_DIR")
-    if env: return env
-    if os.path.isdir("/mount/data") or os.access("/mount/data", os.W_OK):
-        return "/mount/data/cinematch"  # Cloud persistent volume
-    return os.path.join(os.path.expanduser("~"), ".cache", "cinematch")
+    if env:
+        return env
+    if os.access("/mount", os.W_OK):
+        root = "/mount"
+        path = os.path.join(root, "cinematch")
+        os.makedirs(path, exist_ok=True)
+        return path
+    # fallback: ephemeral but writable
+    root = os.path.join(os.path.expanduser("~"), ".cache")
+    try:
+        os.makedirs(root, exist_ok=True)
+    except Exception:
+        root = tempfile.gettempdir()
+    path = os.path.join(root, "cinematch")
+    os.makedirs(path, exist_ok=True)
+    return path
+
 
 @st.cache_resource(show_spinner=True)
-def _bundle(data_dir: str, force_flavor: str, min_ratings_for_sims: int, max_items_for_sims: int, topk: int, limit_1m: bool):
-    # why: cache key includes knobs so we reuse the right matrix
+def _bundle(
+    data_dir: str,
+    force_flavor: str,
+    min_ratings_for_sims: int,
+    max_items_for_sims: int,
+    topk: int,
+    limit_1m: bool,
+):
     return bootstrap_data(
         data_dir=data_dir,
         min_ratings_for_sims=min_ratings_for_sims,
@@ -41,18 +77,25 @@ def _bundle(data_dir: str, force_flavor: str, min_ratings_for_sims: int, max_ite
         limit_1m=limit_1m,
     )
 
+
 def _set_selected(mid: int | None, sync_widget: bool = False):
     val = int(mid) if mid is not None else None
     st.session_state["selected_movie_id"] = val
     if sync_widget:
         st.session_state["pending_pick"] = val  # keep selectbox in sync next run
 
+
 def _get_selected() -> int | None:
     return st.session_state.get("selected_movie_id")
 
+
 def genre_chips_simple(genres: str) -> str:
     parts = [g for g in (genres or "").split("|") if g.strip()]
-    return "".join([f"<span class='cm-chip'>{p}</span>" for p in parts[:10]]) or "<span class='cm-chip'>—</span>"
+    return (
+        "".join([f"<span class='cm-chip'>{p}</span>" for p in parts[:10]])
+        or "<span class='cm-chip'>—</span>"
+    )
+
 
 def main():
     st.markdown("# 🎬 CineMatch")
@@ -62,26 +105,46 @@ def main():
     with st.sidebar:
         st.header("Dataset & performance")
         data_dir = _default_data_dir()
+        # On Cloud default to 100K and smaller cap to speed up cold starts
+        on_cloud = os.environ.get("STREAMLIT_RUNTIME", "") == "cloud"
         use_100k = st.toggle("Use MovieLens-100K (fast)", value=True)
         min_r = st.number_input("Min ratings per item", 5, 200, 50, 5)
-        cap_items = st.number_input("Max items used for similarity", 1000, 50000, 20000, 1000)
+        default_cap = 12000 if use_100k else (15000 if on_cloud else 20000)
+        cap_items = st.number_input(
+            "Max items used for similarity", 1000, 50000, default_cap, 1000
+        )
         topk = st.slider("Top-K neighbors per item", 10, 100, 50, 5)
 
         force_flavor = "ml-100k" if use_100k else "ml-1m"
-        limit_1m = True  # keep 1M quick by capping to popular items
+        limit_1m = True
 
         st.caption(f"Data dir: `{os.path.abspath(data_dir)}`")
-        bundle = _bundle(data_dir, force_flavor, int(min_r), int(cap_items), int(topk), limit_1m)
-        st.success(f"Flavor: **{bundle.flavor}**  •  Users: {len(bundle.user_map):,}  •  Movies: {len(bundle.item_map):,}")
+        try:
+            bundle = _bundle(
+                data_dir, force_flavor, int(min_r), int(cap_items), int(topk), limit_1m
+            )
+            st.success(
+                f"Flavor: **{bundle.flavor}**  •  Users: {len(bundle.user_map):,}  •  Movies: {len(bundle.item_map):,}"
+            )
+        except Exception as e:
+            st.error(
+                "Failed to initialize dataset/cache. "
+                "This usually means the environment can't write to the chosen directory or SciPy failed to install."
+            )
+            st.exception(e)
+            st.stop()
 
         if st.button("↻ Reset cache / recompute"):
             try:
-                st.cache_data.clear(); st.cache_resource.clear()
+                st.cache_data.clear()
+                st.cache_resource.clear()
             except Exception:
                 pass
             try:
-                cache_path = os.path.join(data_dir, "item_sims_topk.npz")
-                if os.path.exists(cache_path): os.remove(cache_path)
+                # wipe all known cache files
+                for fn in os.listdir(data_dir):
+                    if fn.startswith("item_sims_topk_") and fn.endswith(".npz"):
+                        os.remove(os.path.join(data_dir, fn))
             except Exception:
                 pass
             st.toast("Cache cleared. Re-running …")
@@ -89,7 +152,9 @@ def main():
 
     # Search
     st.subheader("Search by movie name (year optional)")
-    q = st.text_input("Try: **Toy Story** | **Toy Story (1995)** | **Matrix** | **Godfather**", key="q")
+    q = st.text_input(
+        "Try: **Toy Story** | **Toy Story (1995)** | **Matrix** | **Godfather**", key="q"
+    )
 
     last_q = st.session_state.get("last_q")
     if q != last_q:
@@ -116,10 +181,14 @@ def main():
                 current = _get_selected()
                 pick_state = st.session_state.get("pick")
 
-                if pending in options: default_value = pending
-                elif isinstance(pick_state, int) and pick_state in options: default_value = pick_state
-                elif current in options: default_value = current
-                else: default_value = options[0]
+                if pending in options:
+                    default_value = pending
+                elif isinstance(pick_state, int) and pick_state in options:
+                    default_value = pick_state
+                elif current in options:
+                    default_value = current
+                else:
+                    default_value = options[0]
 
                 if current is None and pending is None and pick_state is None:
                     _set_selected(default_value, sync_widget=True)
@@ -156,7 +225,9 @@ def main():
 
         with c2:
             st.subheader("Similar Movies")
-            k_sims = st.slider("How many suggestions do you want?", 5, 20, 12, 1, key=f"k_sims_{sel}")
+            k_sims = st.slider(
+                "How many suggestions do you want?", 5, 20, 12, 1, key=f"k_sims_{sel}"
+            )
             sims = similar_items(bundle, sel, k=int(k_sims))
             if sims.empty:
                 st.info("No similar items found.")
@@ -168,9 +239,11 @@ def main():
                     cols = st.columns(cols_per_row)
                     for c in range(cols_per_row):
                         idx = r * cols_per_row + c
-                        if idx >= n: break
+                        if idx >= n:
+                            break
                         row = sims.iloc[idx]
-                        mid = int(row["movieId"]); title = str(row["title"])
+                        mid = int(row["movieId"])
+                        title = str(row["title"])
                         with cols[c]:
                             st.markdown("<div class='cm-title-btn'>", unsafe_allow_html=True)
                             if st.button(title, key=f"sugg_{mid}", use_container_width=True):
@@ -179,11 +252,13 @@ def main():
                             st.markdown("</div>", unsafe_allow_html=True)
 
                 st.dataframe(
-                    sims.head(n).rename(columns={"movieId": "ID"})[["ID", "title", "genres", "year", "similarity"]],
+                    sims.head(n)
+                    .rename(columns={"movieId": "ID"})[["ID", "title", "genres", "year", "similarity"]],
                     hide_index=True,
                     use_container_width=True,
                     height=200 + 22 * n,
                 )
+
 
 if __name__ == "__main__":
     main()
