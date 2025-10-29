@@ -5,7 +5,7 @@ import os
 import streamlit as st
 import pandas as pd
 
-from recsys_core import (
+from recsys.recsys_core import (
     bootstrap_data, search_movies, movie_card, similar_items,
 )
 
@@ -143,4 +143,5 @@ def main():
             )
 
 if __name__ == "__main__":
+
     main()
