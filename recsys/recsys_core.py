@@ -3,11 +3,7 @@
 # ==========================================
 from __future__ import annotations
 
-import io
-import json
-import os
-import re
-import zipfile
+import io, json, os, re, zipfile
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -16,8 +12,7 @@ import pandas as pd
 import requests
 from scipy import sparse
 
-# ---------- Download sources ----------
-ML32M_URL  = "https://files.grouplens.org/datasets/movielens/ml-32m.zip"
+# ---------- Download sources (32M removed on purpose) ----------
 ML1M_URL   = "https://files.grouplens.org/datasets/movielens/ml-1m.zip"
 ML100K_URL = "https://files.grouplens.org/datasets/movielens/ml-100k.zip"
 
@@ -30,10 +25,6 @@ def _download_zip(url: str, dest_dir: str) -> None:
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         zf.extractall(dest_dir)  # why: avoids partial files
 
-def _has_32m(data_dir: str) -> bool:
-    base = os.path.join(data_dir, "ml-32m")
-    return os.path.exists(os.path.join(base, "ratings.csv")) and os.path.exists(os.path.join(base, "movies.csv"))
-
 def _has_1m(data_dir: str) -> bool:
     base = os.path.join(data_dir, "ml-1m")
     return os.path.exists(os.path.join(base, "ratings.dat")) and os.path.exists(os.path.join(base, "movies.dat"))
@@ -42,38 +33,57 @@ def _has_100k(data_dir: str) -> bool:
     base = os.path.join(data_dir, "ml-100k")
     return os.path.exists(os.path.join(base, "u.data")) and os.path.exists(os.path.join(base, "u.item"))
 
-def _bootstrap(data_dir: str) -> str:
-    if _has_32m(data_dir):  return "ml-32m"
-    if _has_1m(data_dir):   return "ml-1m"
-    if _has_100k(data_dir): return "ml-100k"
-    try: _download_zip(ML32M_URL, data_dir); return "ml-32m"
-    except Exception: pass
+def _bootstrap(data_dir: str, force_flavor: str = "auto") -> str:
+    """
+    Only 1M and 100K. force_flavor in {"auto","ml-1m","ml-100k"}.
+    """
+    if force_flavor not in {"auto", "ml-1m", "ml-100k"}:
+        force_flavor = "auto"
+
+    # Honor local copies first
+    if force_flavor in {"auto", "ml-1m"} and _has_1m(data_dir):   return "ml-1m"
+    if force_flavor in {"auto", "ml-100k"} and _has_100k(data_dir): return "ml-100k"
+
+    # Download per force
+    if force_flavor == "ml-1m":
+        try: _download_zip(ML1M_URL, data_dir); return "ml-1m"
+        except Exception: pass
+        _download_zip(ML100K_URL, data_dir); return "ml-100k"
+
+    if force_flavor == "ml-100k":
+        _download_zip(ML100K_URL, data_dir); return "ml-100k"
+
+    # auto: try 1M then 100K
     try: _download_zip(ML1M_URL, data_dir); return "ml-1m"
     except Exception: pass
     _download_zip(ML100K_URL, data_dir); return "ml-100k"
 
 # ---------- loaders ----------
-def _load_ml32m(data_dir: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    base = os.path.join(data_dir, "ml-32m")
-    ratings = pd.read_csv(os.path.join(base, "ratings.csv"))
-    movies  = pd.read_csv(os.path.join(base, "movies.csv"))
-    ratings = ratings.rename(columns={"userId":"userId","movieId":"movieId","rating":"rating","timestamp":"timestamp"})
-    movies  = movies.rename(columns={"movieId":"movieId","title":"title","genres":"genres"})
-    return ratings, movies
-
 def _load_ml1m(data_dir: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     base = os.path.join(data_dir, "ml-1m")
-    ratings = pd.read_csv(os.path.join(base, "ratings.dat"), sep="::", engine="python", header=None,
-                          names=["userId", "movieId", "rating", "timestamp"])
-    movies = pd.read_csv(os.path.join(base, "movies.dat"), sep="::", engine="python", header=None, encoding="latin-1",
-                         names=["movieId", "title", "genres"])
+    ratings = pd.read_csv(
+        os.path.join(base, "ratings.dat"),
+        sep="::", engine="python", header=None,
+        names=["userId", "movieId", "rating", "timestamp"],
+    )
+    movies = pd.read_csv(
+        os.path.join(base, "movies.dat"),
+        sep="::", engine="python", header=None, encoding="latin-1",
+        names=["movieId", "title", "genres"],
+    )
     return ratings, movies
 
 def _load_ml100k(data_dir: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     base = os.path.join(data_dir, "ml-100k")
-    ratings = pd.read_csv(os.path.join(base, "u.data"), sep="\t", engine="python", header=None,
-                          names=["userId", "movieId", "rating", "timestamp"])
-    raw = pd.read_csv(os.path.join(base, "u.item"), sep="|", engine="python", header=None, encoding="latin-1")
+    ratings = pd.read_csv(
+        os.path.join(base, "u.data"),
+        sep="\t", engine="python", header=None,
+        names=["userId", "movieId", "rating", "timestamp"],
+    )
+    raw = pd.read_csv(
+        os.path.join(base, "u.item"),
+        sep="|", engine="python", header=None, encoding="latin-1",
+    )
     raw = raw.rename(columns={0: "movieId", 1: "title"})
     if raw.shape[1] > 5:
         genre_cols = list(range(5, raw.shape[1]))
@@ -130,18 +140,16 @@ def _binarize(R: sparse.csr_matrix, thr: float = 4.0) -> sparse.csr_matrix:
     return sparse.csr_matrix((data, R.indices, R.indptr), shape=R.shape)
 
 def _topk_item_cosine(R_bin: sparse.csr_matrix, k: int = 50) -> sparse.csr_matrix:
-    # CSR with per-ROW top-k similarities (row j holds neighbors for item j)
     n_items = R_bin.shape[1]
     norms = np.sqrt(R_bin.multiply(R_bin).sum(axis=0)).A1 + 1e-8
     indptr=[0]; indices=[]; data=[]; block=1024
     Rt = R_bin.T.tocsr()
     for start in range(0, n_items, block):
         stop = min(start+block, n_items)
-        numer = Rt @ R_bin[:, start:stop]             # (n_items x block)
+        numer = Rt @ R_bin[:, start:stop]
         denom = norms[:, None] * norms[start:stop][None, :]
-        cs = numer.multiply(sparse.csr_matrix(1.0/denom))
-        cs.setdiag(0)
-        for j in range(cs.shape[1]):                  # build row for item (start+j)
+        cs = numer.multiply(sparse.csr_matrix(1.0/denom)); cs.setdiag(0)
+        for j in range(cs.shape[1]):
             col = cs.getcol(j).tocoo()
             if col.nnz == 0:
                 indptr.append(indptr[-1]); continue
@@ -193,20 +201,21 @@ def bootstrap_data(
     min_ratings_for_sims: int = 50,
     max_items_for_sims: int = 20000,
     topk: int = 50,
+    force_flavor: str = "auto",   # "auto" | "ml-1m" | "ml-100k"
+    limit_1m: bool = True,        # cap popular items on 1M for speed
 ) -> DataBundle:
     _ensure_dir(data_dir)
-    flavor = _bootstrap(data_dir)
+    flavor = _bootstrap(data_dir, force_flavor=force_flavor)
 
-    if flavor == "ml-32m":
-        ratings, movies = _load_ml32m(data_dir)
-    elif flavor == "ml-1m":
+    if flavor == "ml-1m":
         ratings, movies = _load_ml1m(data_dir)
     else:
         ratings, movies = _load_ml100k(data_dir)
 
     movies = add_title_features(movies)
 
-    if flavor == "ml-32m":
+    # Optional filtering for similarity matrix on 1M
+    if flavor == "ml-1m" and limit_1m:
         active_item_ids = _filter_popular_items(ratings, min_ratings_for_sims, max_items_for_sims)
         ratings = ratings[ratings["movieId"].isin(active_item_ids)].copy()
         movies  = movies[movies["movieId"].isin(active_item_ids)].copy()
@@ -225,7 +234,8 @@ def bootstrap_data(
                 meta.get("flavor") == flavor and
                 meta.get("topk") == topk and
                 meta.get("min_ratings_for_sims") == min_ratings_for_sims and
-                meta.get("max_items_for_sims") == max_items_for_sims
+                meta.get("max_items_for_sims") == max_items_for_sims and
+                meta.get("limit_1m") == limit_1m
             )
             if not ok: sims = None
         except Exception:
@@ -235,14 +245,19 @@ def bootstrap_data(
         Rb = _binarize(R, 4.0)
         sims = _topk_item_cosine(Rb, k=topk)
         _save_sparse(cache, sims, {
-            "shape": list(R.shape), "flavor": flavor, "topk": topk,
-            "min_ratings_for_sims": min_ratings_for_sims, "max_items_for_sims": max_items_for_sims,
+            "shape": list(R.shape),
+            "flavor": flavor,
+            "topk": topk,
+            "min_ratings_for_sims": min_ratings_for_sims,
+            "max_items_for_sims": max_items_for_sims,
+            "limit_1m": limit_1m,
         })
 
     return DataBundle(
         data_dir=data_dir, flavor=flavor,
         ratings=ratings, movies=movies,
-        user_map=user_map, item_map=item_map, inv_user_map=inv_user_map, inv_item_map=inv_item_map,
+        user_map=user_map, item_map=item_map,
+        inv_user_map=inv_user_map, inv_item_map=inv_item_map,
         R=R, item_sims=sims, item_stats=_stats(ratings)
     )
 
@@ -269,33 +284,20 @@ def search_movies(bundle: DataBundle, query: str, limit: int = 25) -> pd.DataFra
     return out.head(limit)[["movieId", "title", "genres", "year"]]
 
 def similar_items(bundle: DataBundle, movie_id: int, k: int = 10) -> pd.DataFrame:
-    # Correct orientation: each ROW holds neighbors for that item
     if movie_id not in bundle.item_map:
         return pd.DataFrame(columns=["movieId","title","genres","year","similarity"])
     j = bundle.item_map[movie_id]
     row = bundle.item_sims.getrow(j).tocoo()
     if row.nnz == 0:
         return pd.DataFrame(columns=["movieId","title","genres","year","similarity"])
-
-    idx = row.col
-    val = row.data
-
-    # drop self (may or may not be present)
-    keep = idx != j
-    idx = idx[keep]; val = val[keep]
-
-    if idx.size == 0:
+    order = np.argsort(-row.data)
+    idx = row.col[order]; val = row.data[order]
+    mids = [bundle.inv_item_map[i] for i in idx if i != j][:k]
+    sims = [v for i,v in zip(idx, val) if i != j][:k]
+    if not mids:
         return pd.DataFrame(columns=["movieId","title","genres","year","similarity"])
-
-    # sort by similarity desc, then take top-k
-    order = np.argsort(-val)
-    idx = idx[order][:k]; val = val[order][:k]
-
-    mids = [bundle.inv_item_map[i] for i in idx]
-    info = bundle.movies.set_index("movieId").reindex(mids)[["title","genres","year"]].reset_index()
-
-    # 0–1 normalization for UI
-    sim = (val - val.min()) / (val.max() - val.min() + 1e-8)
+    info = bundle.movies.set_index("movieId").loc[mids][["title","genres","year"]].reset_index()
+    sim = (np.array(sims) - float(np.min(sims)))/(float(np.max(sims))-float(np.min(sims))+1e-8)
     info["similarity"] = sim
     return info
 
