@@ -1,7 +1,6 @@
 # 🎬 CineMatch
 
-**CineMatch** is an interactive movie recommendation app built with **Streamlit** and **Python**, powered by **MovieLens** datasets.  
-It lets you **search any movie**, view its details, and explore **AI-based similar titles** using **cosine similarity and Pearson correlation**.
+**CineMatch** is an interactive movie recommendation app built with **Streamlit** and **Python**, powered by **MovieLens** datasets. It lets you **search any movie**, view its details, and explore **AI-based similar titles** using **cosine similarity and Pearson correlation**.
 
 ---
 
