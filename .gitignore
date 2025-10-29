@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.DS_Store
+.recsys_cache/
+.recsys_logs/
+.streamlit/
+data/*.zip
+data/item_sims_topk.npz
+data/ml-100k/
+data/ml-1m/
