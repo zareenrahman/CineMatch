@@ -1,3 +1,6 @@
+# ==========================================
+# file: recsys/recsys_core.py
+# ==========================================
 from __future__ import annotations
 
 import io
@@ -127,17 +130,18 @@ def _binarize(R: sparse.csr_matrix, thr: float = 4.0) -> sparse.csr_matrix:
     return sparse.csr_matrix((data, R.indices, R.indptr), shape=R.shape)
 
 def _topk_item_cosine(R_bin: sparse.csr_matrix, k: int = 50) -> sparse.csr_matrix:
+    # CSR with per-ROW top-k similarities (row j holds neighbors for item j)
     n_items = R_bin.shape[1]
     norms = np.sqrt(R_bin.multiply(R_bin).sum(axis=0)).A1 + 1e-8
     indptr=[0]; indices=[]; data=[]; block=1024
     Rt = R_bin.T.tocsr()
     for start in range(0, n_items, block):
         stop = min(start+block, n_items)
-        numer = Rt @ R_bin[:, start:stop]
+        numer = Rt @ R_bin[:, start:stop]             # (n_items x block)
         denom = norms[:, None] * norms[start:stop][None, :]
         cs = numer.multiply(sparse.csr_matrix(1.0/denom))
-        cs.setdiag(0)  # drop self
-        for j in range(cs.shape[1]):
+        cs.setdiag(0)
+        for j in range(cs.shape[1]):                  # build row for item (start+j)
             col = cs.getcol(j).tocoo()
             if col.nnz == 0:
                 indptr.append(indptr[-1]); continue
@@ -238,8 +242,7 @@ def bootstrap_data(
     return DataBundle(
         data_dir=data_dir, flavor=flavor,
         ratings=ratings, movies=movies,
-        user_map=user_map, item_map=item_map,
-        inv_user_map=inv_user_map, inv_item_map=inv_item_map,
+        user_map=user_map, item_map=item_map, inv_user_map=inv_user_map, inv_item_map=inv_item_map,
         R=R, item_sims=sims, item_stats=_stats(ratings)
     )
 
@@ -266,21 +269,34 @@ def search_movies(bundle: DataBundle, query: str, limit: int = 25) -> pd.DataFra
     return out.head(limit)[["movieId", "title", "genres", "year"]]
 
 def similar_items(bundle: DataBundle, movie_id: int, k: int = 10) -> pd.DataFrame:
+    # Correct orientation: each ROW holds neighbors for that item
     if movie_id not in bundle.item_map:
         return pd.DataFrame(columns=["movieId","title","genres","year","similarity"])
     j = bundle.item_map[movie_id]
-    col = bundle.item_sims.getcol(j).tocoo()  # why: need .row/.data from COO
-    if col.nnz == 0:
+    row = bundle.item_sims.getrow(j).tocoo()
+    if row.nnz == 0:
         return pd.DataFrame(columns=["movieId","title","genres","year","similarity"])
-    idx = col.row[:k]; val = col.data[:k]
+
+    idx = row.col
+    val = row.data
+
+    # drop self (may or may not be present)
+    keep = idx != j
+    idx = idx[keep]; val = val[keep]
+
+    if idx.size == 0:
+        return pd.DataFrame(columns=["movieId","title","genres","year","similarity"])
+
+    # sort by similarity desc, then take top-k
+    order = np.argsort(-val)
+    idx = idx[order][:k]; val = val[order][:k]
+
     mids = [bundle.inv_item_map[i] for i in idx]
-    info = bundle.movies.set_index("movieId").loc[mids][["title","genres","year"]].reset_index()
-    info = info[info["movieId"] != int(movie_id)].reset_index(drop=True)  # drop self
-    if len(val) > 0:
-        sim = (val - val.min())/(val.max()-val.min()+1e-8)
-        info["similarity"] = sim[: len(info)]
-    else:
-        info["similarity"] = []
+    info = bundle.movies.set_index("movieId").reindex(mids)[["title","genres","year"]].reset_index()
+
+    # 0–1 normalization for UI
+    sim = (val - val.min()) / (val.max() - val.min() + 1e-8)
+    info["similarity"] = sim
     return info
 
 def movie_card(bundle: DataBundle, movie_id: int) -> Dict[str, object]:
